@@ -6,13 +6,15 @@ from backtrader.position import Position
 from loguru import logger
 from .CCXTOrder import CCXTOrder
 
-class Broker(bt.BackBroker):
+class OKXBroker(bt.BackBroker):
     params = (
         ('cash', 1000.0),
         ('leverage', 3),
         ('symbol', None),
         ('type', 'SPOT'), # 产品类型 SPOT：币币  SWAP：永续合约
         ('slippage', 0.000),  # 滑点比例%
+        ('stop_percent', 0),   # 止损百分比
+        ('limit_percent', 0),  # 止盈百分比
     )
 
     SWAP = 'SWAP'
@@ -27,10 +29,10 @@ class Broker(bt.BackBroker):
         bt.Order.Sell: 'sell'
     }
 
-
     def __init__(self, store):
-        super(Broker, self).__init__()
+        super(OKXBroker, self).__init__()
         self.store = store
+        self.store.set_Kline_symbol(self._symbol())
         if self._is_swap():
             logger.info(f"Set SWAP {self._symbol()} leverage:{self.p.leverage}")
             self.store.set_leverage(self._symbol(), self.p.leverage)
@@ -54,12 +56,12 @@ class Broker(bt.BackBroker):
         return self.p.type == self.SPOT
 
     def init(self):
-        super(Broker, self).init()
+        super(OKXBroker, self).init()
         self.startingcash = self.cash = self.p.cash
         self._value = self.cash
         self.orders = list()
         self.notifs = collections.deque()
-        self.positions = collections.defaultdict(Position)
+        # self.positions = collections.defaultdict(Position)
 
     def get_notification(self):
         try:
@@ -88,15 +90,15 @@ class Broker(bt.BackBroker):
     def getposition(self, data):
         '''Returns the current position status (a ``Position`` instance) for
         the given ``data``'''
-        return self.positions[data]
+        position = self.store.fetch_positions(self._symbol())
+        size = position['pos'] if position['pos'] != '' else 0
+        price = position['avgPx'] if position['avgPx'] != '' else 0
+        p = Position(size=float(size), price=float(price))
+        return p
 
     def get_value(self, datas=None, mkt=False, lever=False):
         '''Returns the current value of the portfolio'''
         value = self.cash
-        for data, position in self.positions.items():
-            # 获取当前市场价格
-            price = data.close[0]
-            value += position.size * price
         return value
 
     getvalue = get_value
@@ -106,18 +108,37 @@ class Broker(bt.BackBroker):
         if not ordtyp:
             logger.error(f"ordtyp:{ordtyp}")
 
-        side = self.OrdTypes.get(side)
-        if not side:
-            logger.error(f"side:{side}")
-
         position = self.getposition(data)
         params = {}
         if self.p.type == self.SWAP:
             params = {
                 'tdMode': self.store.ISOLATED, # 逐仓
-                'reduceOnly': position.size >= size,
-                # slTriggerPx TODO 止损触发价
+                # 'reduceOnly': position.size != 0,
             }
+        algo_orders = {}  # 下单附带止损止盈
+        if self.p.stop_percent > 0 :  # 止损
+            stop_price = float(price) * (1 - self.p.stop_percent)
+            if side == bt.Order.Sell:
+                stop_price = float(price) * (1 + self.p.stop_percent)
+
+            algo_orders['slTriggerPx'] = stop_price
+            algo_orders['slOrdPx'] = -1
+
+        if self.p.limit_percent > 0 :  # 止盈
+            limit_price = float(price) * (1 + self.p.stop_percent)
+            if side == bt.Order.Sell:
+                limit_price = float(price) * (1 - self.p.stop_percent)
+
+            algo_orders['tpTriggerPx'] = limit_price
+            algo_orders['tpOrdPx'] = -1
+
+        if len(algo_orders) != 0:
+            params['attachAlgoOrds'] = algo_orders
+
+        side = self.OrdTypes.get(side)
+        if not side:
+            logger.error(f"side:{side}")
+
         result = self.store.create_order(self._symbol(), side, ordtyp, size, price, params=params)
         return result
 
@@ -132,7 +153,7 @@ class Broker(bt.BackBroker):
             price = buyLmt
 
         # 处理小数位
-        size = self.store.handler_precision(self._market_id(), size)
+        price, size = self.store.handler_precision(self._market_id(), price, size)
         result = self._submit(data, side, exectype, size, price)
         order = CCXTOrder(owner, data, result, side, size, price, exectype)
         self.orders.append(order)
@@ -150,17 +171,25 @@ class Broker(bt.BackBroker):
             price = sellLmt
 
         # 处理小数位
-        size = self.store.handler_precision(self._market_id(), size)
+        price, size = self.store.handler_precision(self._market_id(), price, size)
         result = self._submit(data, side, exectype, size, price)
         order = CCXTOrder(owner, data, result, side, size, price, exectype)
         self.orders.append(order)
+
+    def buy_bracket(self, data=None, size=None, price=None, plimit=None,
+                    exectype=bt.Order.Limit, valid=None, tradeid=0,
+                    trailamount=None, trailpercent=None, oargs={},
+                    stopprice=None, stopexec=bt.Order.Stop, stopargs={},
+                    limitprice=None, limitexec=bt.Order.Limit, limitargs={},
+                    **kwargs):
+        pass
 
     def next(self):
         for order in self.orders:
             try:
                 ccxt_order = self.store.fetch_order(order.ccxt_order['id'], self._symbol())
                 order.update(ccxt_order)
-                self._update_position(order)
+                self._update_cash(order)
                 self.notify(order)
             except Exception as e:
                 logger.error(f"Error fetching order status: {e}")
@@ -168,17 +197,13 @@ class Broker(bt.BackBroker):
         # 清理已完成或取消的订单
         self.orders = [order for order in self.orders if order.status in [bt.Order.Submitted, bt.Order.Accepted]]
 
-
     def get_highest_price_limit(self, symbol):
         response = self.store.exchange.public_get_public_price_limit({
             'instId': symbol
         })
         return float(response['data'][0]['buyLmt']), float(response['data'][0]['sellLmt'])
 
-    def _update_position(self, order):
-        '''Updates the position for the given order'''
-        data = order.data
-        position = self.positions[data]
+    def _update_cash(self, order):
         if order.status == bt.Order.Completed:
             if self._is_swap(): #  swap
                 margin = (self.contract_size * order.executed.size * order.executed.price) / self.p.leverage
@@ -188,24 +213,14 @@ class Broker(bt.BackBroker):
                 else:
                     self.cash -= margin
 
-                if order.ordtype == bt.Order.Buy:
-                    position.size += order.executed.size
-                else:
-                    position.size -= order.executed.size
-
             else:  # spot
                 if order.ordtype == bt.Order.Buy:
-                    position.size += order.executed.size
                     self.cash -= order.executed.size * order.executed.price
-                    # 扣除手续费
-                    position.size -= order.executed.comm
 
                 elif order.ordtype == bt.Order.Sell:
-                    position.size -= order.executed.size
                     self.cash += order.executed.size * order.executed.price
                     # 扣除手续费
                     self.cash -= order.executed.comm * order.executed.price
-        self.positions[data] = position
 
     def get_contract_size(self):
         """
@@ -241,7 +256,8 @@ class Broker(bt.BackBroker):
         """
         return (self.cash - 0.1) / price
 
-    def _calculate_open_number(self, price):
+    def calculate_open_number(self, price, side):
+        price = self._calculate_slippage(price, side)
         if self._is_swap():
             return self._calculate_open_contracts(price)
         if self._is_spot():

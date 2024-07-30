@@ -71,6 +71,9 @@ class CCXTStore(bt.DataBase):
         self.kline_interval = self.p.interval
         logger.info(f"Set kline {self.kline_symbol} {self.kline_interval}")
 
+    def set_Kline_symbol(self, symbol):
+        self.kline_symbol = self.p.symbol = symbol
+
     def set_leverage(self, symbol, leverage, mgnMode='isolated'):
         """
         :param symbol:
@@ -117,10 +120,17 @@ class CCXTStore(bt.DataBase):
         except Exception as e:
             logger.error(f"Failed to cancel order: {e}")
 
-    def handler_precision(self, symbol, value):
+    def handler_precision(self, symbol, price, value):
+        price_precision = int(abs(Decimal(str(self.markets[symbol]['precision']['price'])).as_tuple().exponent))
+        price = truncate_to_decimal_places(price, price_precision)
+
         amount_precision = int(abs(Decimal(str(self.markets[symbol]['precision']['amount'])).as_tuple().exponent))
         value = truncate_to_decimal_places(value, amount_precision)
-        return value
+        return price, value
+
+    def fetch_positions(self, symbol):
+        positions = self.exchange.fetch_positions(symbols=[symbol])
+        return positions[0]['info']
 
     def haslivedata(self):
         if len(self.ohlcv) != 0:
@@ -136,7 +146,9 @@ class CCXTStore(bt.DataBase):
             if not self.ohlcv:
                 while not self.ohlcv:
                     time.sleep(2)
-                    to_ = int(datetime.now(timezone.utc).timestamp()) * 1000
+                    to_ = self.fetch_time()
+                    if 60 - datetime.fromtimestamp(to_ / 1000).second > 10:
+                        continue
                     from_ = to_ - self._interval_to_milliseconds(self.kline_interval)
 
                     if self.is_same_minute(to_, self.last_ts):
@@ -193,19 +205,25 @@ class CCXTStore(bt.DataBase):
                 if ohlcvs:
                     back_one = ohlcvs[-1][0]
                     for ohlcv in ohlcvs:
+                        if ohlcv[-1] == 0:
+                            continue
                         if ohlcv[0] > self.last_ts:
                             index_timestamp = ohlcv[0]
                             ohlcv[0] = datetime.fromtimestamp(ohlcv[0] / 1000)
                             self.last_ts = index_timestamp
                             self.ohlcv.append(ohlcv)
                             logger.debug(
-                                f"Fetched data point: {datetime.fromtimestamp(index_timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')} limit {len(ohlcvs)}")
+                                f"Fetched data {self.kline_symbol} point: {datetime.fromtimestamp(index_timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')} limit {len(ohlcvs)}")
                     current_timestamp = back_one + 1  # 更新当前时间戳为最后一个数据点的时间戳+1
                 else:
                     break
         except Exception as e:
             logger.error(f"Error fetching historical data: {e}")
             raise e
+
+    def fetch_time(self):
+        server_time = self.exchange.fetch_time()
+        return server_time
 
     def save_to_csv(self, fromdate, todate, path):
         if fromdate and todate:
@@ -262,7 +280,6 @@ class MyStrategy(bt.SignalStrategy):
         )
 
         logger.info(order_info)
-
 
 
 if __name__ == '__main__':

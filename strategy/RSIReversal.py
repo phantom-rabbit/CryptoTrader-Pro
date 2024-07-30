@@ -9,7 +9,7 @@ class RSIReversal(bt.Strategy):
         ('boll_dev', 3.0),  # 布林带的标准差倍数
         ('rsi_period', 50),  # 短期RSI周期
         ('rsi_buy_signal', 40),  # 中期RSI周期
-        ('rsi_downward_period', 8),  # 连续下降或横盘周期
+        ('rsi_downward_period', 4),  # 连续下降或横盘周期
         ('stop_loss', 0.1),  # 止损百分比
     )
 
@@ -83,15 +83,15 @@ class RSIReversal(bt.Strategy):
         if len(self.datas[0]) < max(self.params.boll_period, self.params.rsi_period):
             logger.debug(f"time:{self.datas[0].datetime.datetime(0)} close price:{self.datas[0].close[0]}")
             return
-        logger.debug(f"[{self.data.datetime.datetime(0)}], "
-                     f"收盘价: {self.data.close[0]}, "
-                     f"最高价: {self.data.high[0]}, "
-                     f"最低价: {self.data.low[0]}, "
-                     f"成交量: {self.data.volume[0]:.8f}, "
-                     f"RSI值: {self.rsi[0]}, "
-                     f"布林带上轨: {self.boll.lines.top[0]}, "
-                     f"中轨: {self.boll.lines.mid[0]}, "
-                     f"下轨: {self.boll.lines.bot[0]}")
+        # logger.debug(f"[{self.data.datetime.datetime(0)}], "
+        #              f"收盘价: {self.data.close[0]}, "
+        #              f"最高价: {self.data.high[0]}, "
+        #              f"最低价: {self.data.low[0]}, "
+        #              f"成交量: {self.data.volume[0]:.8f}, "
+        #              f"RSI值: {self.rsi[0]}, "
+        #              f"布林带上轨: {self.boll.lines.top[0]}, "
+        #              f"中轨: {self.boll.lines.mid[0]}, "
+        #              f"下轨: {self.boll.lines.bot[0]}")
         self.risk_management()
         self.handle_oscillating_market()
 
@@ -139,6 +139,9 @@ class RSIReversal(bt.Strategy):
             "止损次数": self.StopLoss,
         }
 
+    def _get_buy_size(self, price):
+        return self.broker._calculate_open_number(price)
+
     def handle_oscillating_market(self):
         if self._open_order:  # 有未完成订单
             return
@@ -154,30 +157,28 @@ class RSIReversal(bt.Strategy):
         # 成交量
         volume = np.array([self.data.volume[-i] for i in range(1, 6)])
 
-        logger.debug(f"RSI:{recent_rsi_list} 是否连续下降趋势:{is_rsi_downward}")
+        logger.debug(f"{current_time} close:{current_close} RSI:{self.rsi[0]} 是否连续下降趋势:{is_rsi_downward}")
         # logger.debug(f"收盘价:{close_values} 连续上升:{close_trend}")
 
         if self._op == bt.Order.Buy:
             if self.rsi[0] < self.p.rsi_buy_signal:  # rsi 阈值
                 if is_rsi_downward:  # rsi连续下降
                     if current_close > self.data.close[-1]:  # rsi 底部价格和rsi背离
-                        cash = self.broker.getcash() - 0.1   # 避免计算精度问题导致溢价
-                        size = cash / current_close
+                        size = self._get_buy_size()
                         order = self._sumit_buy_order(current_close, size, bt.Order.Limit)
                         if order:
                             self.buy_signal = False
                             logger.info(
-                                f"买入订单.{current_time} 价格:{current_close} 数量:{size:.8f} cash:{cash} 成交量:{volume}")
+                                f"买入订单.{current_time} 价格:{current_close} 数量:{size:.8f}")
                             return
 
             if self.rsi[0] < 10: # 超卖，反转
-                cash = self.broker.getcash() - 0.1  # 避免计算精度问题导致溢价
-                size = cash / current_close
+                size = self._get_buy_size()
                 order = self._sumit_buy_order(current_close, size, bt.Order.Limit)
                 if order:
                     self.buy_signal = False
                     logger.info(
-                        f"买入订单.{current_time} 价格:{current_close} 数量:{size:.8f} cash:{cash} 成交量:{volume}")
+                        f"买入订单.{current_time} 价格:{current_close} 数量:{size:.8f}")
                     return
 
         if self._op == bt.Order.Sell:
