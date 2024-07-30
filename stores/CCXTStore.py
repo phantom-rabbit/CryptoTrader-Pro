@@ -145,7 +145,7 @@ class CCXTStore(bt.DataBase):
         try:
             if not self.ohlcv:
                 while not self.ohlcv:
-                    time.sleep(2)
+                    time.sleep(1)
                     to_ = self.fetch_time()
                     if 60 - datetime.fromtimestamp(to_ / 1000).second > 10:
                         continue
@@ -212,8 +212,8 @@ class CCXTStore(bt.DataBase):
                             ohlcv[0] = datetime.fromtimestamp(ohlcv[0] / 1000)
                             self.last_ts = index_timestamp
                             self.ohlcv.append(ohlcv)
-                            logger.debug(
-                                f"Fetched data {self.kline_symbol} point: {datetime.fromtimestamp(index_timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')} limit {len(ohlcvs)}")
+                            #logger.debug(
+                            #    f"Fetched data {self.kline_symbol} point: {ohlcv}")
                     current_timestamp = back_one + 1  # 更新当前时间戳为最后一个数据点的时间戳+1
                 else:
                     break
