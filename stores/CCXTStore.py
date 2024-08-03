@@ -9,6 +9,9 @@ import pandas as pd
 import ccxt
 from loguru import logger
 
+from .OKX_Data import OKXKlineSocket
+import asyncio
+
 
 def truncate_to_decimal_places(number, decimal_places):
     # 确保 decimal_places 是整数
@@ -70,6 +73,11 @@ class CCXTStore(bt.DataBase):
         self.kline_symbol = self.p.symbol
         self.kline_interval = self.p.interval
         logger.info(f"Set kline {self.kline_symbol} {self.kline_interval}")
+
+        if self.p.exchange_name == "okx":
+            wsc = OKXKlineSocket(self.p.symbol, self.p.interval, self.p.sandbox)
+            self.wsc = wsc
+            logger.info(f"Start {self.p.exchange_name} kline websocket success!")
 
     def set_Kline_symbol(self, symbol):
         self.kline_symbol = self.p.symbol = symbol
@@ -142,6 +150,28 @@ class CCXTStore(bt.DataBase):
         return True
 
     def _load(self):
+        if self.wsc:
+            if self.ohlcv:
+                ohlc = self.ohlcv.pop(0)
+                ohlc[0] = bt.date2num(ohlc[0])
+                self.lines.datetime[0] = ohlc[0]
+                self.lines.open[0] = ohlc[1]
+                self.lines.high[0] = ohlc[2]
+                self.lines.low[0] = ohlc[3]
+                self.lines.close[0] = ohlc[4]
+                self.lines.volume[0] = ohlc[5]
+                return True
+
+            ohlc = self.wsc.get_ohlcv()
+            ohlc[0] = bt.date2num(ohlc[0])
+            self.lines.datetime[0] = ohlc[0]
+            self.lines.open[0] = ohlc[1]
+            self.lines.high[0] = ohlc[2]
+            self.lines.low[0] = ohlc[3]
+            self.lines.close[0] = ohlc[4]
+            self.lines.volume[0] = ohlc[-2]
+            return True
+
         try:
             if not self.ohlcv:
                 while not self.ohlcv:
@@ -186,6 +216,8 @@ class CCXTStore(bt.DataBase):
             return amount * 3600 * 1000
         elif unit == 'd':
             return amount * 86400 * 1000
+        elif unit == 's':
+            return amount * 1000
         else:
             raise ValueError(f"Invalid interval: {interval}")
 

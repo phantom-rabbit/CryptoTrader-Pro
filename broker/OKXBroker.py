@@ -6,23 +6,24 @@ from backtrader.position import Position
 from loguru import logger
 from .CCXTOrder import CCXTOrder
 
+
 class OKXBroker(bt.BackBroker):
     params = (
         ('cash', 1000.0),
         ('leverage', 3),
         ('symbol', None),
-        ('type', 'SPOT'), # 产品类型 SPOT：币币  SWAP：永续合约
+        ('type', 'SPOT'),  # 产品类型 SPOT：币币  SWAP：永续合约
         ('slippage', 0.000),  # 滑点比例%
-        ('stop_percent', 0),   # 止损百分比
+        ('stop_percent', 0),  # 止损百分比
         ('limit_percent', 0),  # 止盈百分比
     )
 
     SWAP = 'SWAP'
     SPOT = 'SPOT'
     ExecTypes = {bt.Order.Market: 'market',
-                   bt.Order.Limit: 'limit',
-                   bt.Order.Stop: 'stop',  # stop-loss for kraken, stop for bitmex
-                   bt.Order.StopLimit: 'stop limit'}
+                 bt.Order.Limit: 'limit',
+                 bt.Order.Stop: 'stop',  # stop-loss for kraken, stop for bitmex
+                 bt.Order.StopLimit: 'stop limit'}
 
     OrdTypes = {
         bt.Order.Buy: 'buy',
@@ -112,11 +113,11 @@ class OKXBroker(bt.BackBroker):
         params = {}
         if self.p.type == self.SWAP:
             params = {
-                'tdMode': self.store.ISOLATED, # 逐仓
+                'tdMode': self.store.ISOLATED,  # 逐仓
                 # 'reduceOnly': position.size != 0,
             }
         algo_orders = {}  # 下单附带止损止盈
-        if self.p.stop_percent > 0 :  # 止损
+        if self.p.stop_percent > 0:  # 止损
             stop_price = float(price) * (1 - self.p.stop_percent)
             if side == bt.Order.Sell:
                 stop_price = float(price) * (1 + self.p.stop_percent)
@@ -124,7 +125,7 @@ class OKXBroker(bt.BackBroker):
             algo_orders['slTriggerPx'] = stop_price
             algo_orders['slOrdPx'] = -1
 
-        if self.p.limit_percent > 0 :  # 止盈
+        if self.p.limit_percent > 0:  # 止盈
             limit_price = float(price) * (1 + self.p.stop_percent)
             if side == bt.Order.Sell:
                 limit_price = float(price) * (1 - self.p.stop_percent)
@@ -205,7 +206,7 @@ class OKXBroker(bt.BackBroker):
 
     def _update_cash(self, order):
         if order.status == bt.Order.Completed:
-            if self._is_swap(): #  swap
+            if self._is_swap():  #  swap
                 margin = (self.contract_size * order.executed.size * order.executed.price) / self.p.leverage
                 self.cash -= order.ccxt_order['fee']['cost']
                 if order.ccxt_order['reduceOnly']:
